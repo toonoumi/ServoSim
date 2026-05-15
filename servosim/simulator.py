@@ -77,10 +77,13 @@ class SimulationLoop(QThread):
             "current": round(m.current, 6),
             "power": round(m.power, 4),
             "torque": round(m.torque, 6),
+            "gravity_torque": round(m.gravity_torque, 6),
             "kp": m.pid.kp,
             "ki": m.pid.ki,
             "kd": m.pid.kd,
             "hall_a": m.hall.hall_a,
             "hall_b": m.hall.hall_b,
             "hall_c": m.hall.hall_c,
+            "payload_direction": m.payload_direction.value,
+            "payload_tilt_deg": m.payload_tilt_deg,
         }

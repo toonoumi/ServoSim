@@ -1,8 +1,10 @@
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
-    QLabel, QSlider, QDoubleSpinBox, QPushButton, QSizePolicy,
+    QLabel, QSlider, QDoubleSpinBox, QPushButton, QComboBox, QSizePolicy,
 )
+
+from ..physics import PayloadDirection
 
 
 class HallIndicator(QWidget):
@@ -78,12 +80,20 @@ class StatusPanel(QGroupBox):
 
 
 class ControlPanel(QGroupBox):
-    target_changed  = pyqtSignal(float)
-    payload_changed = pyqtSignal(float)
-    gains_changed   = pyqtSignal(float, float, float)
-    run_clicked     = pyqtSignal()
-    pause_clicked   = pyqtSignal()
-    reset_clicked   = pyqtSignal()
+    target_changed    = pyqtSignal(float)
+    payload_changed   = pyqtSignal(float)
+    direction_changed = pyqtSignal(str, float)   # (direction_value, tilt_deg)
+    gains_changed     = pyqtSignal(float, float, float)
+    run_clicked       = pyqtSignal()
+    pause_clicked     = pyqtSignal()
+    reset_clicked     = pyqtSignal()
+
+    _DIRECTION_LABELS = [
+        ("Vertical (arm in vertical plane)",   PayloadDirection.VERTICAL),
+        ("Horizontal (arm in horizontal plane)", PayloadDirection.HORIZONTAL),
+        ("Rotational (flywheel / added inertia)", PayloadDirection.ROTATIONAL),
+        ("Angled (tilted plane)",               PayloadDirection.ANGLED),
+    ]
 
     def __init__(self, parent=None):
         super().__init__("Controls", parent)
@@ -111,27 +121,61 @@ class ControlPanel(QGroupBox):
         layout.addWidget(tgt_grp)
 
         # --- Payload ---
-        pay_grp = QGroupBox("Payload Mass")
-        pay_lay = QVBoxLayout(pay_grp)
-        self._pay_slider = QSlider(Qt.Horizontal)
-        self._pay_slider.setRange(0, 1000)
-        self._pay_slider.setValue(0)
+        pay_grp = QGroupBox("Payload")
+        pay_form = QFormLayout(pay_grp)
+        pay_form.setVerticalSpacing(4)
+
+        # Mass
         self._pay_spin = QDoubleSpinBox()
         self._pay_spin.setRange(0.0, 10.0)
         self._pay_spin.setSingleStep(0.1)
         self._pay_spin.setSuffix(" kg")
+        self._pay_slider = QSlider(Qt.Horizontal)
+        self._pay_slider.setRange(0, 1000)
+        self._pay_slider.setValue(0)
         self._pay_slider.valueChanged.connect(
             lambda v: self._pay_spin.setValue(v / 100.0))
         self._pay_spin.valueChanged.connect(
             lambda v: (self._pay_slider.blockSignals(True),
                        self._pay_slider.setValue(int(v * 100)),
                        self._pay_slider.blockSignals(False)))
+        pay_form.addRow("Mass:", self._pay_slider)
+        pay_form.addRow("", self._pay_spin)
+
+        # Direction combo
+        self._dir_combo = QComboBox()
+        for label, _ in self._DIRECTION_LABELS:
+            self._dir_combo.addItem(label)
+        self._dir_combo.setCurrentIndex(0)
+        self._dir_combo.currentIndexChanged.connect(self._on_direction_changed)
+        pay_form.addRow("Direction:", self._dir_combo)
+
+        # Tilt angle (only visible in ANGLED mode)
+        self._tilt_label = QLabel("Tilt angle:")
+        self._tilt_spin = QDoubleSpinBox()
+        self._tilt_spin.setRange(0.0, 90.0)
+        self._tilt_spin.setSingleStep(5.0)
+        self._tilt_spin.setSuffix(" °")
+        self._tilt_spin.setValue(45.0)
+        self._tilt_slider = QSlider(Qt.Horizontal)
+        self._tilt_slider.setRange(0, 900)
+        self._tilt_slider.setValue(450)
+        self._tilt_slider.valueChanged.connect(
+            lambda v: self._tilt_spin.setValue(v / 10.0))
+        self._tilt_spin.valueChanged.connect(
+            lambda v: (self._tilt_slider.blockSignals(True),
+                       self._tilt_slider.setValue(int(v * 10)),
+                       self._tilt_slider.blockSignals(False),
+                       self._emit_direction()))
+        pay_form.addRow(self._tilt_label, self._tilt_slider)
+        pay_form.addRow("", self._tilt_spin)
+        self._tilt_label.setVisible(False)
+        self._tilt_slider.setVisible(False)
+        self._tilt_spin.setVisible(False)
+
         btn_apply_pay = QPushButton("Apply Mid-Motion")
-        btn_apply_pay.clicked.connect(
-            lambda: self.payload_changed.emit(self._pay_spin.value()))
-        pay_lay.addWidget(self._pay_slider)
-        pay_lay.addWidget(self._pay_spin)
-        pay_lay.addWidget(btn_apply_pay)
+        btn_apply_pay.clicked.connect(self._apply_payload)
+        pay_form.addRow(btn_apply_pay)
         layout.addWidget(pay_grp)
 
         # --- PID gains ---
@@ -174,6 +218,22 @@ class ControlPanel(QGroupBox):
     def _emit_gains(self) -> None:
         self.gains_changed.emit(
             self._kp.value(), self._ki.value(), self._kd.value())
+
+    def _apply_payload(self) -> None:
+        self.payload_changed.emit(self._pay_spin.value())
+        self._emit_direction()
+
+    def _on_direction_changed(self, index: int) -> None:
+        is_angled = self._DIRECTION_LABELS[index][1] == PayloadDirection.ANGLED
+        self._tilt_label.setVisible(is_angled)
+        self._tilt_slider.setVisible(is_angled)
+        self._tilt_spin.setVisible(is_angled)
+        self._emit_direction()
+
+    def _emit_direction(self) -> None:
+        idx = self._dir_combo.currentIndex()
+        direction = self._DIRECTION_LABELS[idx][1].value
+        self.direction_changed.emit(direction, self._tilt_spin.value())
 
     def update_gains_display(self, kp: float, ki: float, kd: float) -> None:
         for spin, val in [(self._kp, kp), (self._ki, ki), (self._kd, kd)]:

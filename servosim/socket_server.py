@@ -128,3 +128,9 @@ class SocketServer:
             motor.set_target(float(msg["target"]))
         if "payload" in msg:
             motor.set_payload(float(msg["payload"]))
+        if "direction" in msg:
+            tilt = float(msg["tilt_angle"]) if "tilt_angle" in msg else None
+            try:
+                motor.set_payload_direction(msg["direction"], tilt)
+            except ValueError:
+                pass  # ignore unknown direction strings

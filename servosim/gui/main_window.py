@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         # Wire signals
         self._controls.target_changed.connect(self._on_target_changed)
         self._controls.payload_changed.connect(self._on_payload_changed)
+        self._controls.direction_changed.connect(self._on_direction_changed)
         self._controls.gains_changed.connect(self._on_gains_changed)
         self._controls.run_clicked.connect(self._on_run)
         self._controls.pause_clicked.connect(self._on_pause)
@@ -75,6 +76,10 @@ class MainWindow(QMainWindow):
     @pyqtSlot(float)
     def _on_payload_changed(self, mass_kg: float) -> None:
         self._motor.set_payload(mass_kg)
+
+    @pyqtSlot(str, float)
+    def _on_direction_changed(self, direction: str, tilt_deg: float) -> None:
+        self._motor.set_payload_direction(direction, tilt_deg)
 
     @pyqtSlot(float, float, float)
     def _on_gains_changed(self, kp: float, ki: float, kd: float) -> None:
