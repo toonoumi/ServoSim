@@ -1,0 +1,182 @@
+from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
+    QLabel, QSlider, QDoubleSpinBox, QPushButton, QSizePolicy,
+)
+
+
+class HallIndicator(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._leds = {}
+        for name in ("A", "B", "C"):
+            lbl = QLabel()
+            lbl.setFixedSize(18, 18)
+            self._set_led(lbl, False)
+            layout.addWidget(QLabel(f"{name}:"))
+            layout.addWidget(lbl)
+            layout.addSpacing(6)
+            self._leds[name] = lbl
+
+    @staticmethod
+    def _set_led(lbl: QLabel, on: bool) -> None:
+        color = "#00CC44" if on else "#444444"
+        lbl.setStyleSheet(
+            f"background:{color}; border-radius:9px; border:1px solid #222;"
+        )
+
+    def update_state(self, a: int, b: int, c: int) -> None:
+        self._set_led(self._leds["A"], bool(a))
+        self._set_led(self._leds["B"], bool(b))
+        self._set_led(self._leds["C"], bool(c))
+
+
+class StatusPanel(QGroupBox):
+    def __init__(self, parent=None):
+        super().__init__("Telemetry", parent)
+        form = QFormLayout(self)
+        form.setVerticalSpacing(3)
+        self._fields = {}
+        for key, label in [
+            ("position",      "Position (°)"),
+            ("target",        "Target (°)"),
+            ("position_error","Error (°)"),
+            ("voltage",       "Voltage (V)"),
+            ("current",       "Current (A)"),
+            ("power",         "Power (W)"),
+            ("torque",        "Torque (Nm)"),
+            ("kp",            "Kp"),
+            ("ki",            "Ki"),
+            ("kd",            "Kd"),
+            ("timestamp",     "Tick"),
+        ]:
+            val = QLabel("—")
+            val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            val.setMinimumWidth(90)
+            form.addRow(label + ":", val)
+            self._fields[key] = val
+
+        hall_row = QHBoxLayout()
+        self._hall = HallIndicator()
+        hall_row.addWidget(QLabel("Hall A/B/C:"))
+        hall_row.addWidget(self._hall)
+        hall_row.addStretch()
+        form.addRow(hall_row)
+
+    def update_status(self, data: dict) -> None:
+        for key, lbl in self._fields.items():
+            if key in data:
+                v = data[key]
+                lbl.setText(f"{v:.4f}" if isinstance(v, float) else str(v))
+        self._hall.update_state(
+            data.get("hall_a", 0),
+            data.get("hall_b", 0),
+            data.get("hall_c", 0),
+        )
+
+
+class ControlPanel(QGroupBox):
+    target_changed  = pyqtSignal(float)
+    payload_changed = pyqtSignal(float)
+    gains_changed   = pyqtSignal(float, float, float)
+    run_clicked     = pyqtSignal()
+    pause_clicked   = pyqtSignal()
+    reset_clicked   = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__("Controls", parent)
+        layout = QVBoxLayout(self)
+
+        # --- Target position ---
+        tgt_grp = QGroupBox("Target Position")
+        tgt_lay = QVBoxLayout(tgt_grp)
+        self._tgt_slider = QSlider(Qt.Horizontal)
+        self._tgt_slider.setRange(0, 3600)
+        self._tgt_slider.setValue(0)
+        self._tgt_spin = QDoubleSpinBox()
+        self._tgt_spin.setRange(0.0, 360.0)
+        self._tgt_spin.setSingleStep(1.0)
+        self._tgt_spin.setSuffix(" °")
+        tgt_lay.addWidget(self._tgt_slider)
+        tgt_lay.addWidget(self._tgt_spin)
+        self._tgt_slider.valueChanged.connect(
+            lambda v: self._tgt_spin.setValue(v / 10.0))
+        self._tgt_spin.valueChanged.connect(
+            lambda v: (self._tgt_slider.blockSignals(True),
+                       self._tgt_slider.setValue(int(v * 10)),
+                       self._tgt_slider.blockSignals(False),
+                       self.target_changed.emit(v)))
+        layout.addWidget(tgt_grp)
+
+        # --- Payload ---
+        pay_grp = QGroupBox("Payload Mass")
+        pay_lay = QVBoxLayout(pay_grp)
+        self._pay_slider = QSlider(Qt.Horizontal)
+        self._pay_slider.setRange(0, 1000)
+        self._pay_slider.setValue(0)
+        self._pay_spin = QDoubleSpinBox()
+        self._pay_spin.setRange(0.0, 10.0)
+        self._pay_spin.setSingleStep(0.1)
+        self._pay_spin.setSuffix(" kg")
+        self._pay_slider.valueChanged.connect(
+            lambda v: self._pay_spin.setValue(v / 100.0))
+        self._pay_spin.valueChanged.connect(
+            lambda v: (self._pay_slider.blockSignals(True),
+                       self._pay_slider.setValue(int(v * 100)),
+                       self._pay_slider.blockSignals(False)))
+        btn_apply_pay = QPushButton("Apply Mid-Motion")
+        btn_apply_pay.clicked.connect(
+            lambda: self.payload_changed.emit(self._pay_spin.value()))
+        pay_lay.addWidget(self._pay_slider)
+        pay_lay.addWidget(self._pay_spin)
+        pay_lay.addWidget(btn_apply_pay)
+        layout.addWidget(pay_grp)
+
+        # --- PID gains ---
+        pid_grp = QGroupBox("PID Gains")
+        pid_form = QFormLayout(pid_grp)
+        self._kp = self._make_gain_spin(10.0)
+        self._ki = self._make_gain_spin(0.5)
+        self._kd = self._make_gain_spin(0.1)
+        pid_form.addRow("Kp:", self._kp)
+        pid_form.addRow("Ki:", self._ki)
+        pid_form.addRow("Kd:", self._kd)
+        btn_gains = QPushButton("Apply Gains")
+        btn_gains.clicked.connect(self._emit_gains)
+        pid_form.addRow(btn_gains)
+        layout.addWidget(pid_grp)
+
+        # --- Simulation buttons ---
+        btn_row = QHBoxLayout()
+        self._btn_run   = QPushButton("Run")
+        self._btn_pause = QPushButton("Pause")
+        self._btn_reset = QPushButton("Reset")
+        self._btn_run.clicked.connect(self.run_clicked)
+        self._btn_pause.clicked.connect(self.pause_clicked)
+        self._btn_reset.clicked.connect(self.reset_clicked)
+        btn_row.addWidget(self._btn_run)
+        btn_row.addWidget(self._btn_pause)
+        btn_row.addWidget(self._btn_reset)
+        layout.addLayout(btn_row)
+        layout.addStretch()
+
+    @staticmethod
+    def _make_gain_spin(default: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 1000.0)
+        spin.setDecimals(4)
+        spin.setSingleStep(0.1)
+        spin.setValue(default)
+        return spin
+
+    def _emit_gains(self) -> None:
+        self.gains_changed.emit(
+            self._kp.value(), self._ki.value(), self._kd.value())
+
+    def update_gains_display(self, kp: float, ki: float, kd: float) -> None:
+        for spin, val in [(self._kp, kp), (self._ki, ki), (self._kd, kd)]:
+            spin.blockSignals(True)
+            spin.setValue(val)
+            spin.blockSignals(False)
