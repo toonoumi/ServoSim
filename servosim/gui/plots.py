@@ -24,6 +24,7 @@ class PlotPanel(QWidget):
         self._err = deque(maxlen=WINDOW_POINTS)
         self._cur = deque(maxlen=WINDOW_POINTS)
         self._torq = deque(maxlen=WINDOW_POINTS)
+        self._cav = deque(maxlen=WINDOW_POINTS)
 
         def make_plot(title, unit):
             p = self._glw.addPlot(title=title)
@@ -38,9 +39,10 @@ class PlotPanel(QWidget):
         self._p_err  = make_plot("Error", "degrees")
         self._p_cur  = make_plot("Current", "A")
         self._p_torq = make_plot("Torque", "Nm")
+        self._p_cav  = make_plot("Cavity Pressure", "rel.")
 
         # Link x-axes for synchronized scrolling
-        for p in (self._p_err, self._p_cur, self._p_torq):
+        for p in (self._p_err, self._p_cur, self._p_torq, self._p_cav):
             p.setXLink(self._p_pos)
 
         self._c_pos    = self._p_pos.plot(pen=pg.mkPen("#f0c040", width=1.5), name="position")
@@ -48,6 +50,7 @@ class PlotPanel(QWidget):
         self._c_err    = self._p_err.plot(pen=pg.mkPen("#e05050", width=1.5), name="error")
         self._c_cur    = self._p_cur.plot(pen=pg.mkPen("#40c0f0", width=1.5), name="current")
         self._c_torq   = self._p_torq.plot(pen=pg.mkPen("#c040e0", width=1.5), name="torque")
+        self._c_cav    = self._p_cav.plot(pen=pg.mkPen("#ff8800", width=1.5), name="cavity_pressure")
 
         self._frame_skip = 0
 
@@ -59,6 +62,7 @@ class PlotPanel(QWidget):
         self._err.append(data["position_error"])
         self._cur.append(data["current"])
         self._torq.append(data["torque"])
+        self._cav.append(data.get("cavity_pressure", 0.0))
 
         # Redraw every 3 samples (~33 Hz) to keep GUI responsive
         self._frame_skip += 1
@@ -72,13 +76,14 @@ class PlotPanel(QWidget):
         self._c_err.setData(t, np.array(self._err))
         self._c_cur.setData(t, np.array(self._cur))
         self._c_torq.setData(t, np.array(self._torq))
+        self._c_cav.setData(t, np.array(self._cav))
 
         if len(t) >= 2:
             x_min = t[-1] - WINDOW_POINTS * 10  # 10ms per tick
             self._p_pos.setXRange(x_min, t[-1], padding=0)
 
     def clear_data(self) -> None:
-        for buf in (self._t, self._pos, self._tgt, self._err, self._cur, self._torq):
+        for buf in (self._t, self._pos, self._tgt, self._err, self._cur, self._torq, self._cav):
             buf.clear()
-        for curve in (self._c_pos, self._c_target, self._c_err, self._c_cur, self._c_torq):
+        for curve in (self._c_pos, self._c_target, self._c_err, self._c_cur, self._c_torq, self._c_cav):
             curve.setData([], [])

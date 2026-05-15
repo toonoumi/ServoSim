@@ -15,6 +15,17 @@ class PayloadDirection(str, Enum):
 
 
 @dataclass
+class InjectionParams:
+    enabled: bool = False
+    engagement_distance: float = 30.0  # degrees — resistance starts this far from target
+    release_distance: float = 5.0      # degrees — suction disappears beyond this
+    k_approach: float = 0.08           # Nm scale for logarithmic approach curve
+    k_release: float = 0.04            # Nm constant suction resisting retraction
+    holding_force: float = 0.02        # Nm backpressure when stationary near target
+    shear_thinning: float = 0.5        # 1/(rad/s): higher speed reduces approach resistance
+
+
+@dataclass
 class MotorParams:
     R: float = 2.5          # winding resistance (Ω)
     L: float = 0.001        # winding inductance (H)
@@ -51,6 +62,11 @@ class ServoMotor:
         self.payload_direction: PayloadDirection = PayloadDirection.VERTICAL
         self.payload_tilt_deg: float = 45.0  # used only in ANGLED mode
 
+        # Injection load (stacks with gravity)
+        self.injection = InjectionParams()
+        self.injection_torque: float = 0.0
+        self.cavity_pressure: float = 0.0
+
         # Outputs (updated each step)
         self.torque: float = 0.0
         self.power: float = 0.0
@@ -61,6 +77,12 @@ class ServoMotor:
 
     def set_payload(self, mass_kg: float) -> None:
         self.payload_mass_kg = max(0.0, float(mass_kg))
+
+    def set_injection(self, **kwargs) -> None:
+        for k, v in kwargs.items():
+            if hasattr(self.injection, k):
+                cur = getattr(self.injection, k)
+                setattr(self.injection, k, type(cur)(v))
 
     def set_payload_direction(self, direction: PayloadDirection,
                                tilt_deg: float | None = None) -> None:
@@ -76,6 +98,8 @@ class ServoMotor:
             self.omega_rad = 0.0
             self.torque = 0.0
             self.power = 0.0
+            self.injection_torque = 0.0
+            self.cavity_pressure = 0.0
             self.pid.reset()
             self.hall.update(0.0)
 
@@ -117,17 +141,48 @@ class ServoMotor:
         if direction == PayloadDirection.ROTATIONAL:
             J_eff += mass * arm ** 2
 
-        # Motor torque + friction + damping
+        # Motor torque
         T_motor = self.params.Kt * self.current
         omega = self.omega_rad
+
+        # Injection load (stacks with gravity)
+        inj = self.injection
+        if inj.enabled:
+            _EPS = 0.01  # degrees — avoids log(0)
+            d_signed = ((target - pos_deg + 180.0) % 360.0) - 180.0
+            d_abs = abs(d_signed)
+            sign_to_tgt = math.copysign(1.0, d_signed) if d_abs > 1e-6 else 0.0
+            omega_abs = abs(omega)
+            T_inj = 0.0
+            if omega_abs > 1e-4:
+                sign_mot = math.copysign(1.0, omega)
+                if sign_mot == sign_to_tgt and d_abs < inj.engagement_distance:
+                    ratio = max(d_abs, _EPS) / inj.engagement_distance
+                    mag = inj.k_approach * (-math.log(ratio))
+                    mag *= 1.0 / (1.0 + inj.shear_thinning * omega_abs)
+                    T_inj = -sign_to_tgt * mag
+                elif sign_mot != sign_to_tgt and d_abs < inj.release_distance:
+                    T_inj = sign_to_tgt * inj.k_release
+            elif d_abs < inj.release_distance:
+                T_inj = -sign_to_tgt * inj.holding_force
+            self.injection_torque = T_inj
+            if d_abs < inj.engagement_distance:
+                self.cavity_pressure = max(0.0, -math.log(max(d_abs, _EPS) / inj.engagement_distance))
+            else:
+                self.cavity_pressure = 0.0
+        else:
+            self.injection_torque = 0.0
+            self.cavity_pressure = 0.0
+
+        # Friction + damping
         if abs(omega) > 1e-4:
             T_friction = self.params.Tc * math.copysign(1.0, omega)
         else:
-            net_before_friction = T_motor - T_gravity
+            net_before_friction = T_motor - T_gravity - self.injection_torque
             T_friction = max(-self.params.Tc, min(self.params.Tc, net_before_friction))
 
         T_damping = self.params.b * omega
-        T_net = T_motor - T_gravity - T_friction - T_damping
+        T_net = T_motor - T_gravity - self.injection_torque - T_friction - T_damping
         self.torque = T_net
 
         # Mechanical integration

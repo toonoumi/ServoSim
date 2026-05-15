@@ -134,3 +134,7 @@ class SocketServer:
                 motor.set_payload_direction(msg["direction"], tilt)
             except ValueError:
                 pass  # ignore unknown direction strings
+        inj_fields = {k[len("injection_"):]: v for k, v in msg.items()
+                      if k.startswith("injection_")}
+        if inj_fields:
+            motor.set_injection(**inj_fields)

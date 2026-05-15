@@ -2,6 +2,7 @@ from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QComboBox, QSizePolicy,
+    QCheckBox, QSpinBox,
 )
 
 from ..physics import PayloadDirection
@@ -80,13 +81,15 @@ class StatusPanel(QGroupBox):
 
 
 class ControlPanel(QGroupBox):
-    target_changed    = pyqtSignal(float)
-    payload_changed   = pyqtSignal(float)
-    direction_changed = pyqtSignal(str, float)   # (direction_value, tilt_deg)
-    gains_changed     = pyqtSignal(float, float, float)
-    run_clicked       = pyqtSignal()
-    pause_clicked     = pyqtSignal()
-    reset_clicked     = pyqtSignal()
+    target_changed      = pyqtSignal(float)
+    payload_changed     = pyqtSignal(float)
+    direction_changed   = pyqtSignal(str, float)   # (direction_value, tilt_deg)
+    gains_changed       = pyqtSignal(float, float, float)
+    injection_changed   = pyqtSignal(dict)          # full InjectionParams dict
+    cycle_start_clicked = pyqtSignal(float)         # hold_time_ms
+    run_clicked         = pyqtSignal()
+    pause_clicked       = pyqtSignal()
+    reset_clicked       = pyqtSignal()
 
     _DIRECTION_LABELS = [
         ("Vertical (arm in vertical plane)",   PayloadDirection.VERTICAL),
@@ -192,6 +195,71 @@ class ControlPanel(QGroupBox):
         pid_form.addRow(btn_gains)
         layout.addWidget(pid_grp)
 
+        # --- Injection molding load ---
+        inj_grp = QGroupBox("Injection Load")
+        inj_form = QFormLayout(inj_grp)
+        inj_form.setVerticalSpacing(4)
+
+        self._inj_enable = QCheckBox("Enable injection mode")
+        inj_form.addRow(self._inj_enable)
+
+        def make_inj_spin(lo, hi, default, decimals=4, step=0.01, suffix=""):
+            s = QDoubleSpinBox()
+            s.setRange(lo, hi)
+            s.setDecimals(decimals)
+            s.setSingleStep(step)
+            s.setValue(default)
+            if suffix:
+                s.setSuffix(suffix)
+            return s
+
+        self._inj_engagement = make_inj_spin(1.0, 180.0, 30.0, decimals=1, step=1.0, suffix=" °")
+        self._inj_release    = make_inj_spin(0.5, 90.0, 5.0, decimals=1, step=0.5, suffix=" °")
+        self._inj_k_approach = make_inj_spin(0.0, 5.0, 0.08, step=0.01, suffix=" Nm")
+        self._inj_k_release  = make_inj_spin(0.0, 5.0, 0.04, step=0.01, suffix=" Nm")
+        self._inj_holding    = make_inj_spin(0.0, 5.0, 0.02, step=0.005, suffix=" Nm")
+        self._inj_shear      = make_inj_spin(0.0, 10.0, 0.5, step=0.05)
+
+        inj_form.addRow("Engagement dist:", self._inj_engagement)
+        inj_form.addRow("Release dist:", self._inj_release)
+        inj_form.addRow("Approach resistance:", self._inj_k_approach)
+        inj_form.addRow("Release stickiness:", self._inj_k_release)
+        inj_form.addRow("Holding backpressure:", self._inj_holding)
+        inj_form.addRow("Shear-thinning:", self._inj_shear)
+
+        self._inj_hold_time = QSpinBox()
+        self._inj_hold_time.setRange(50, 10000)
+        self._inj_hold_time.setSingleStep(50)
+        self._inj_hold_time.setValue(500)
+        self._inj_hold_time.setSuffix(" ms")
+        inj_form.addRow("Hold time:", self._inj_hold_time)
+
+        self._btn_cycle = QPushButton("Start Cycle")
+        self._btn_cycle.setEnabled(False)
+        inj_form.addRow(self._btn_cycle)
+        layout.addWidget(inj_grp)
+
+        self._inj_param_widgets = [
+            self._inj_engagement, self._inj_release, self._inj_k_approach,
+            self._inj_k_release, self._inj_holding, self._inj_shear,
+            self._inj_hold_time, self._btn_cycle,
+        ]
+        for w in self._inj_param_widgets:
+            w.setEnabled(False)
+
+        def _on_inj_enable(state):
+            enabled = bool(state)
+            for w in self._inj_param_widgets:
+                w.setEnabled(enabled)
+            self._emit_injection()
+
+        self._inj_enable.stateChanged.connect(_on_inj_enable)
+        for spin in (self._inj_engagement, self._inj_release, self._inj_k_approach,
+                     self._inj_k_release, self._inj_holding, self._inj_shear):
+            spin.valueChanged.connect(lambda _: self._emit_injection())
+        self._btn_cycle.clicked.connect(
+            lambda: self.cycle_start_clicked.emit(float(self._inj_hold_time.value())))
+
         # --- Simulation buttons ---
         btn_row = QHBoxLayout()
         self._btn_run   = QPushButton("Run")
@@ -234,6 +302,17 @@ class ControlPanel(QGroupBox):
         idx = self._dir_combo.currentIndex()
         direction = self._DIRECTION_LABELS[idx][1].value
         self.direction_changed.emit(direction, self._tilt_spin.value())
+
+    def _emit_injection(self) -> None:
+        self.injection_changed.emit({
+            "enabled":             self._inj_enable.isChecked(),
+            "engagement_distance": self._inj_engagement.value(),
+            "release_distance":    self._inj_release.value(),
+            "k_approach":          self._inj_k_approach.value(),
+            "k_release":           self._inj_k_release.value(),
+            "holding_force":       self._inj_holding.value(),
+            "shear_thinning":      self._inj_shear.value(),
+        })
 
     def update_gains_display(self, kp: float, ki: float, kd: float) -> None:
         for spin, val in [(self._kp, kp), (self._ki, ki), (self._kd, kd)]:

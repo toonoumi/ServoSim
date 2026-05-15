@@ -67,6 +67,8 @@ class MainWindow(QMainWindow):
         self._controls.run_clicked.connect(self._on_run)
         self._controls.pause_clicked.connect(self._on_pause)
         self._controls.reset_clicked.connect(self._on_reset)
+        self._controls.injection_changed.connect(self._on_injection_changed)
+        self._controls.cycle_start_clicked.connect(self._on_cycle_start)
         simulator.telemetry_ready.connect(self._on_telemetry)
 
     @pyqtSlot(float)
@@ -84,6 +86,14 @@ class MainWindow(QMainWindow):
     @pyqtSlot(float, float, float)
     def _on_gains_changed(self, kp: float, ki: float, kd: float) -> None:
         self._motor.pid.set_gains(kp, ki, kd)
+
+    @pyqtSlot(dict)
+    def _on_injection_changed(self, params: dict) -> None:
+        self._motor.set_injection(**params)
+
+    @pyqtSlot(float)
+    def _on_cycle_start(self, hold_time_ms: float) -> None:
+        self._sim.start_cycle(hold_time_ms)
 
     @pyqtSlot()
     def _on_run(self) -> None:
@@ -112,6 +122,10 @@ class MainWindow(QMainWindow):
         self._status.update_status(data)
         self._sb_tick.setText(f"t={data['timestamp']} ms")
         self._sb_clients.setText(f"Clients: {self._socket.client_count}")
+
+        stage = data.get("cycle_stage", "idle")
+        if stage != "idle":
+            self._sb_state.setText(f"Running [{stage}]")
 
         # If gains changed externally (via socket), sync the spinboxes
         self._controls.update_gains_display(data["kp"], data["ki"], data["kd"])
